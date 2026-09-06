@@ -23,7 +23,7 @@ https://runoffcrc-uatqrmxbapeecw5mrwznsg.streamlit.app/
 
 - Muestra un mapa base OSM o satelital.
 - Permite dibujar un poligono o cargar un GeoJSON.
-- Usa por defecto un MDE publico en Google Drive o permite seleccionar un GeoTIFF local.
+- Usa por defecto un MDE publico en Google Drive o permite subir un GeoTIFF desde el equipo del usuario.
 - Recorta el MDE al area de interes para reducir memoria y tiempo de proceso.
 - Lee BigTIFF remoto por rangos HTTP cuando Google Drive no funciona directamente como `/vsicurl`.
 - Acondiciona hidrologicamente el MDE recortado para evitar que depresiones internas corten artificialmente la acumulacion.
@@ -71,12 +71,18 @@ http://localhost:8501
 
 ## Flujo de trabajo
 
-1. Selecciona la fuente del MDE: `Google Drive publico` o `Archivo local`.
+1. Selecciona la fuente del MDE: `Google Drive publico`, `Subir GeoTIFF` o `Ruta del servidor (avanzado)`. En Streamlit Cloud, usa `Subir GeoTIFF` para escoger archivos desde Windows.
 2. Dibuja el poligono de analisis en el mapa o carga un GeoJSON.
 3. Ajusta lluvia total, duracion, infiltracion, abstraccion inicial y coeficiente de escorrentia.
 4. Ajusta parametros de cauce, desborde y umbrales de analisis si es necesario.
 5. Ejecuta la simulacion.
 6. Revisa las capas sobre OSM o satelite y descarga los GeoTIFF resultantes.
+
+## GeoTIFF local
+
+En la app publicada, la opcion `Subir GeoTIFF` abre el selector normal del navegador y permite escoger archivos desde el equipo del usuario, por ejemplo desde Windows. La opcion `Ruta del servidor (avanzado)` navega el sistema de archivos donde corre Streamlit; en Streamlit Cloud ese servidor usa rutas Linux y no corresponde a las carpetas del usuario.
+
+Para MDE grandes, normalmente conviene usar la fuente de Google Drive o preparar un recorte/COG, porque la subida por navegador depende del limite de archivo y memoria disponible en Streamlit Cloud.
 
 ## Recorte remoto desde Google Drive
 

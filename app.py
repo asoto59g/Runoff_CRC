@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -40,6 +42,9 @@ def main() -> None:
     st.title("Modelo de escorrentia por DEM")
 
     dem_path = sidebar_dem_path()
+    if not dem_path:
+        st.info("Selecciona una fuente MDE para iniciar el analisis.")
+        return
     preview = load_preview(dem_path)
     if preview is None:
         return
@@ -83,12 +88,12 @@ def main() -> None:
         result_panel(result)
 
 
-def sidebar_dem_path() -> str:
+def sidebar_dem_path() -> str | None:
     with st.sidebar:
         st.header("Insumos")
         source_mode = st.radio(
             "Fuente MDE",
-            ["Google Drive publico", "Archivo local"],
+            ["Google Drive publico", "Subir GeoTIFF", "Ruta del servidor (avanzado)"],
             index=0,
             horizontal=False,
         )
@@ -96,9 +101,54 @@ def sidebar_dem_path() -> str:
             dem_path = st.text_input("Enlace Drive", value=REMOTE_DEM_DRIVE_URL)
             st.caption("Fuente remota por defecto. La lectura usa rangos HTTP para no bajar el raster completo.")
             return dem_path
+        if source_mode == "Subir GeoTIFF":
+            return uploaded_dem_selector()
 
-        st.caption("Selecciona un GeoTIFF existente en las carpetas del equipo local.")
+        st.caption(
+            "Uso avanzado: navega carpetas del servidor donde corre la app. "
+            "En Streamlit Cloud esas rutas son Linux; para elegir un archivo de tu Windows usa Subir GeoTIFF."
+        )
         return local_dem_selector()
+
+
+def uploaded_dem_selector() -> str | None:
+    uploaded = st.file_uploader(
+        "Seleccionar GeoTIFF desde este equipo",
+        type=["tif", "tiff"],
+        accept_multiple_files=False,
+        help="Este selector abre las carpetas del equipo del usuario. En Streamlit Cloud no permite navegar el sistema de archivos Linux del servidor.",
+    )
+    if uploaded is None:
+        st.info("Selecciona un archivo .tif o .tiff desde tu equipo para continuar.")
+        return None
+
+    suffix = Path(uploaded.name).suffix.lower()
+    if suffix not in {".tif", ".tiff"}:
+        st.error("El archivo debe ser .tif o .tiff.")
+        return None
+
+    data = uploaded.getbuffer()
+    sample_size = min(len(data), 1_048_576)
+    digest_source = hashlib.sha256()
+    digest_source.update(uploaded.name.encode("utf-8", errors="ignore"))
+    digest_source.update(str(len(data)).encode("ascii"))
+    digest_source.update(data[:sample_size])
+    if len(data) > sample_size:
+        digest_source.update(data[-sample_size:])
+    digest = digest_source.hexdigest()[:16]
+    stem = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in Path(uploaded.name).stem)
+    stem = (stem[:80] or "uploaded_dem").strip("._-") or "uploaded_dem"
+    upload_dir = Path(tempfile.gettempdir()) / "runoff_crc_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    dem_path = upload_dir / f"{stem}_{digest}{suffix}"
+
+    if not dem_path.exists() or dem_path.stat().st_size != len(data):
+        with dem_path.open("wb") as output:
+            output.write(data)
+
+    st.caption("GeoTIFF cargado en la sesion")
+    st.code(uploaded.name, language="text")
+    return str(dem_path)
 
 
 def local_dem_selector() -> str:
