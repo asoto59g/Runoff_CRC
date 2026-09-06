@@ -45,7 +45,7 @@ def main() -> None:
     if not dem_path:
         st.info("Selecciona una fuente MDE para iniciar el analisis.")
         return
-    preview = load_preview(dem_path)
+    preview = load_preview(dem_path, RUNOFF_MODEL_VERSION)
     if preview is None:
         return
     with st.sidebar:
@@ -82,6 +82,7 @@ def main() -> None:
     result = st.session_state.get("result")
     if result is not None and (
         not hasattr(result, "fill_depth_m")
+        or not hasattr(result, "raster_crs_wkt")
         or result.summary.get("model_version") != RUNOFF_MODEL_VERSION
     ):
         st.session_state.pop("result", None)
@@ -243,7 +244,7 @@ def list_local_entries(folder: Path) -> tuple[list[str], list[str]]:
 
 
 @st.cache_data(show_spinner=False)
-def load_preview(dem_path: str):
+def load_preview(dem_path: str, cache_version: str):
     try:
         return read_raster_preview(dem_path)
     except Exception as exc:
@@ -379,7 +380,8 @@ def draw_geometry(preview):
 
 
 def _preview_map_key(preview) -> str:
-    raw = f"{preview.raster_crs_wkt}|{preview.bounds_dem}|{preview.width}|{preview.height}"
+    raster_crs_wkt = getattr(preview, "raster_crs_wkt", getattr(preview, "crs_label", ""))
+    raw = f"{raster_crs_wkt}|{preview.bounds_dem}|{preview.width}|{preview.height}"
     return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 

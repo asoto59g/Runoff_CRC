@@ -47,7 +47,7 @@ WGS84 = CRS.from_epsg(4326)
 GEOD = Geod(ellps="WGS84")
 DEFAULT_DEM_PATH = "MDE_5K.tif"
 REMOTE_DEM_DRIVE_URL = DEFAULT_DRIVE_DEM_URL
-RUNOFF_MODEL_VERSION = "2026-09-05-lowland-v2"
+RUNOFF_MODEL_VERSION = "2026-09-06-global-crs-v2"
 
 
 class RunoffModelError(ValueError):
