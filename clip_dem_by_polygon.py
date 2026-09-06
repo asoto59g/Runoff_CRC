@@ -18,8 +18,8 @@ def main() -> int:
     parser.add_argument(
         "--input-crs",
         default="auto",
-        choices=["auto", "EPSG:4326", "EPSG:5367"],
-        help="CRS del poligono. Auto detecta WGS84 o CRTM05.",
+        choices=["auto", "EPSG:4326", "EPSG:5367", "raster"],
+        help="CRS del poligono. Auto detecta WGS84/CRTM05; raster asume coordenadas del GeoTIFF.",
     )
     parser.add_argument("--buffer-m", type=float, default=0.0, help="Buffer opcional alrededor del poligono, en metros.")
     parser.add_argument(

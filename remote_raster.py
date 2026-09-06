@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import html
+import importlib.util
 import math
+import os
 import re
 import struct
 import tempfile
@@ -10,6 +12,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse
+
+
+def _configure_bundled_proj_data() -> None:
+    spec = importlib.util.find_spec("rasterio")
+    if spec is None or spec.origin is None:
+        return
+    proj_dir = Path(spec.origin).resolve().parent / "proj_data"
+    if (proj_dir / "proj.db").exists():
+        os.environ["PROJ_DATA"] = str(proj_dir)
+        os.environ["PROJ_LIB"] = str(proj_dir)
+
+
+_configure_bundled_proj_data()
 
 import rasterio
 from affine import Affine

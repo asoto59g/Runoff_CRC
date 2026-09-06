@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import heapq
+import importlib.util
 import json
 import math
+import os
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
+
+def _configure_bundled_proj_data() -> None:
+    spec = importlib.util.find_spec("rasterio")
+    if spec is None or spec.origin is None:
+        return
+    proj_dir = Path(spec.origin).resolve().parent / "proj_data"
+    if (proj_dir / "proj.db").exists():
+        os.environ["PROJ_DATA"] = str(proj_dir)
+        os.environ["PROJ_LIB"] = str(proj_dir)
+
+
+_configure_bundled_proj_data()
 
 import matplotlib
 
@@ -17,7 +31,7 @@ import numpy as np
 import rasterio
 from scipy import ndimage
 from affine import Affine
-from pyproj import CRS, Transformer
+from pyproj import CRS, Geod, Transformer
 from rasterio.enums import Resampling
 from rasterio.features import geometry_mask, geometry_window
 from rasterio.io import MemoryFile
@@ -25,11 +39,12 @@ from rasterio.windows import Window
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
 from shapely.ops import transform as shapely_transform
 from shapely.ops import unary_union
-from remote_raster import DEFAULT_DRIVE_DEM_URL, RemoteRasterError, is_http_url, open_raster_source, read_remote_tiff_info
+from remote_raster import DEFAULT_DRIVE_DEM_URL, is_http_url, open_raster_source, read_remote_tiff_info
 
 
 DEM_CRS = CRS.from_epsg(5367)  # CR05 / CRTM05, meters. The source TIFF is tagged as LOCAL_CS["CRTM05"].
 WGS84 = CRS.from_epsg(4326)
+GEOD = Geod(ellps="WGS84")
 DEFAULT_DEM_PATH = "MDE_5K.tif"
 REMOTE_DEM_DRIVE_URL = DEFAULT_DRIVE_DEM_URL
 RUNOFF_MODEL_VERSION = "2026-09-05-lowland-v2"
@@ -59,12 +74,13 @@ class SimulationConfig:
     large_channel_depth_threshold_m: float = 1.5
     large_channel_search_radius_m: float = 60.0
     large_channel_bank_percentile: float = 75.0
-    input_crs: Literal["auto", "EPSG:4326", "EPSG:5367"] = "auto"
+    input_crs: str = "auto"
 
 
 @dataclass
 class RasterPreview:
     crs_label: str
+    raster_crs_wkt: str
     bounds_dem: tuple[float, float, float, float]
     bounds_wgs84: tuple[float, float, float, float]
     width: int
@@ -75,6 +91,7 @@ class RasterPreview:
 @dataclass
 class RunoffResult:
     dem: np.ndarray
+    raster_crs_wkt: str
     routing_dem: np.ndarray
     fill_depth_m: np.ndarray
     valid_mask: np.ndarray
@@ -106,14 +123,31 @@ class ClipDemResult:
     geometry_wgs84: Polygon | MultiPolygon
 
 
+def raster_crs_for_source(dem_path: str | Path = DEFAULT_DEM_PATH) -> CRS:
+    try:
+        with open_raster_source(dem_path) as src:
+            return _analysis_crs_from_rasterio(src.crs)
+    except Exception as exc:
+        if not is_http_url(dem_path):
+            raise
+        try:
+            read_remote_tiff_info(dem_path)
+        except Exception:
+            raise exc
+        # The bundled Google Drive DEM is tagged LOCAL_CS["CRTM05"].
+        return DEM_CRS
+
+
 def read_raster_preview(dem_path: str | Path = DEFAULT_DEM_PATH) -> RasterPreview:
     try:
         with open_raster_source(dem_path) as src:
+            raster_crs = _analysis_crs_from_rasterio(src.crs)
             bounds_dem = tuple(float(v) for v in src.bounds)
-            bounds_wgs84 = transform_bounds_dem_to_wgs84(bounds_dem)
+            bounds_wgs84 = transform_bounds_dem_to_wgs84(bounds_dem, raster_crs)
             res = (abs(float(src.transform.a)), abs(float(src.transform.e)))
             return RasterPreview(
-                crs_label="CRTM05 / EPSG:5367",
+                crs_label=_crs_label(raster_crs),
+                raster_crs_wkt=raster_crs.to_wkt(),
                 bounds_dem=bounds_dem,
                 bounds_wgs84=bounds_wgs84,
                 width=src.width,
@@ -127,11 +161,13 @@ def read_raster_preview(dem_path: str | Path = DEFAULT_DEM_PATH) -> RasterPrevie
             info = read_remote_tiff_info(dem_path)
         except Exception:
             raise exc
+        raster_crs = DEM_CRS
         bounds_dem = tuple(float(v) for v in info.bounds)
         return RasterPreview(
-            crs_label="CRTM05 / EPSG:5367",
+            crs_label=_crs_label(raster_crs),
+            raster_crs_wkt=raster_crs.to_wkt(),
             bounds_dem=bounds_dem,
-            bounds_wgs84=transform_bounds_dem_to_wgs84(bounds_dem),
+            bounds_wgs84=transform_bounds_dem_to_wgs84(bounds_dem, raster_crs),
             width=info.width,
             height=info.height,
             resolution=info.resolution,
@@ -171,37 +207,77 @@ def load_geojson_geometry(data: str | bytes | dict[str, Any]) -> Polygon | Multi
 
 def normalize_geometry(
     geometry: Polygon | MultiPolygon,
-    input_crs: Literal["auto", "EPSG:4326", "EPSG:5367"] = "auto",
+    input_crs: str = "auto",
+    raster_crs: CRS | str | None = None,
 ) -> tuple[Polygon | MultiPolygon, Polygon | MultiPolygon, str]:
     geometry = _repair_geometry(_polygonal_geometry(geometry))
-    detected = detect_input_crs(geometry) if input_crs == "auto" else input_crs
+    target_crs = _coerce_analysis_crs(raster_crs) if raster_crs is not None else DEM_CRS
+    detected = detect_input_crs(geometry, target_crs) if input_crs == "auto" else input_crs
 
     if detected == "EPSG:4326":
         geometry_wgs84 = geometry
-        geometry_dem = transform_geometry(geometry, WGS84, DEM_CRS)
+        geometry_dem = transform_geometry(geometry, WGS84, target_crs)
     elif detected == "EPSG:5367":
-        geometry_dem = geometry
+        geometry_dem = transform_geometry(geometry, DEM_CRS, target_crs)
         geometry_wgs84 = transform_geometry(geometry, DEM_CRS, WGS84)
+    elif detected == "raster":
+        geometry_dem = geometry
+        geometry_wgs84 = transform_geometry(geometry, target_crs, WGS84)
     else:
         raise RunoffModelError(f"CRS de entrada no soportado: {detected}")
 
     return _repair_geometry(geometry_dem), _repair_geometry(geometry_wgs84), detected
 
 
-def detect_input_crs(geometry: Polygon | MultiPolygon) -> Literal["EPSG:4326", "EPSG:5367"]:
+def detect_input_crs(geometry: Polygon | MultiPolygon, raster_crs: CRS | str | None = None) -> str:
     minx, miny, maxx, maxy = geometry.bounds
 
-    # Costa Rica in lon/lat. Keep this broad enough for offshore islands or small buffers.
-    if -90.5 <= minx <= -80.0 and -90.5 <= maxx <= -80.0 and 5.0 <= miny <= 12.5 and 5.0 <= maxy <= 12.5:
+    if -180.0 <= minx <= 180.0 and -180.0 <= maxx <= 180.0 and -90.0 <= miny <= 90.0 and -90.0 <= maxy <= 90.0:
         return "EPSG:4326"
 
-    # Approximate CRTM05 extent for Costa Rica DEM data.
     if 200_000 <= minx <= 750_000 and 200_000 <= maxx <= 750_000 and 800_000 <= miny <= 1_350_000 and 800_000 <= maxy <= 1_350_000:
         return "EPSG:5367"
 
+    if raster_crs is not None:
+        return "raster"
+
     raise RunoffModelError(
-        "No pude detectar el CRS del poligono. Selecciona EPSG:4326 o EPSG:5367 manualmente."
+        "No pude detectar el CRS del poligono. Selecciona WGS84, CRTM05 o CRS del raster manualmente."
     )
+
+
+def _analysis_crs_from_rasterio(source_crs: Any) -> CRS:
+    if source_crs is None:
+        raise RunoffModelError("El GeoTIFF debe tener CRS definido para ubicarlo en el mapa.")
+    crs_text = source_crs.to_wkt() if hasattr(source_crs, "to_wkt") else str(source_crs)
+    if "CRTM05" in crs_text.upper() or "CR05" in crs_text.upper():
+        return DEM_CRS
+    if hasattr(source_crs, "to_wkt"):
+        return _canonical_crs(CRS.from_wkt(crs_text))
+    return _canonical_crs(CRS.from_user_input(source_crs))
+
+
+def _coerce_analysis_crs(source_crs: CRS | str) -> CRS:
+    if isinstance(source_crs, CRS):
+        return _canonical_crs(source_crs)
+    crs_text = str(source_crs)
+    if "CRTM05" in crs_text.upper() or "CR05" in crs_text.upper():
+        return DEM_CRS
+    return _canonical_crs(CRS.from_user_input(source_crs))
+
+
+def _canonical_crs(crs: CRS) -> CRS:
+    epsg = crs.to_epsg()
+    if epsg:
+        return CRS.from_epsg(epsg)
+    return crs
+
+
+def _crs_label(crs: CRS) -> str:
+    epsg = crs.to_epsg()
+    if epsg:
+        return f"{crs.name} / EPSG:{epsg}"
+    return crs.name or crs.to_string()
 
 
 def transform_geometry(
@@ -213,20 +289,55 @@ def transform_geometry(
     return _polygonal_geometry(shapely_transform(transformer.transform, geometry))
 
 
-def transform_bounds_dem_to_wgs84(bounds: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+def transform_bounds_dem_to_wgs84(
+    bounds: tuple[float, float, float, float],
+    source_crs: CRS | str | None = None,
+) -> tuple[float, float, float, float]:
     minx, miny, maxx, maxy = bounds
-    transformer = Transformer.from_crs(DEM_CRS, WGS84, always_xy=True)
-    xs = [minx, maxx, minx, maxx]
-    ys = [miny, miny, maxy, maxy]
-    lon, lat = transformer.transform(xs, ys)
-    return float(min(lon)), float(min(lat)), float(max(lon)), float(max(lat))
+    crs = _coerce_analysis_crs(source_crs) if source_crs is not None else DEM_CRS
+    transformer = Transformer.from_crs(crs, WGS84, always_xy=True)
+    west, south, east, north = transformer.transform_bounds(minx, miny, maxx, maxy, densify_pts=21)
+    return float(west), float(south), float(east), float(north)
 
+def _pixel_size_m(
+    transform: Affine,
+    raster_crs: CRS,
+    geometry_dem: Polygon | MultiPolygon,
+) -> tuple[float, float]:
+    xres = abs(float(transform.a))
+    yres = abs(float(transform.e))
+    if raster_crs.is_projected:
+        return xres * _axis_to_meter_factor(raster_crs, 0), yres * _axis_to_meter_factor(raster_crs, 1)
+    if raster_crs.is_geographic:
+        centroid = geometry_dem.centroid
+        transformer = Transformer.from_crs(raster_crs, WGS84, always_xy=True)
+        cx, cy = float(centroid.x), float(centroid.y)
+        lon_w, lat_w = transformer.transform(cx - xres / 2.0, cy)
+        lon_e, lat_e = transformer.transform(cx + xres / 2.0, cy)
+        lon_s, lat_s = transformer.transform(cx, cy - yres / 2.0)
+        lon_n, lat_n = transformer.transform(cx, cy + yres / 2.0)
+        _, _, dx = GEOD.inv(lon_w, lat_w, lon_e, lat_e)
+        _, _, dy = GEOD.inv(lon_s, lat_s, lon_n, lat_n)
+        if np.isfinite(dx) and np.isfinite(dy) and dx > 0 and dy > 0:
+            return float(dx), float(dy)
+    return xres, yres
+
+
+def _axis_to_meter_factor(crs: CRS, axis_index: int) -> float:
+    try:
+        factor = float(crs.axis_info[axis_index].unit_conversion_factor)
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return 1.0
+    if not math.isfinite(factor) or factor <= 0:
+        return 1.0
+    return factor
 
 def simulate_runoff(
     geometry: Polygon | MultiPolygon,
     config: SimulationConfig,
 ) -> RunoffResult:
-    geometry_dem, geometry_wgs84, detected_crs = normalize_geometry(geometry, config.input_crs)
+    raster_crs = raster_crs_for_source(config.dem_path)
+    geometry_dem, geometry_wgs84, detected_crs = normalize_geometry(geometry, config.input_crs, raster_crs)
 
     rainfall_mm = max(0.0, float(config.rainfall_mm))
     duration_h = max(float(config.duration_min) / 60.0, 1.0 / 60.0)
@@ -247,20 +358,21 @@ def simulate_runoff(
 
     xres = abs(float(transform.a))
     yres = abs(float(transform.e))
-    cell_area_m2 = xres * yres
+    xres_m, yres_m = _pixel_size_m(transform, raster_crs, geometry_dem)
+    cell_area_m2 = xres_m * yres_m
     area_m2 = float(np.count_nonzero(valid_mask) * cell_area_m2)
 
     if config.condition_dem:
-        routing_dem, fill_depth_m = _condition_dem_for_routing(dem, valid_mask, xres, yres, config.fill_epsilon_m)
+        routing_dem, fill_depth_m = _condition_dem_for_routing(dem, valid_mask, xres_m, yres_m, config.fill_epsilon_m)
     else:
         routing_dem = dem.astype("float32", copy=True)
         fill_depth_m = np.zeros_like(dem, dtype="float32")
         fill_depth_m[~valid_mask] = np.nan
 
-    down_flat, best_slope, sink_mask, outlet_mask = _d8_flow_direction(routing_dem, valid_mask, xres, yres)
+    down_flat, best_slope, sink_mask, outlet_mask = _d8_flow_direction(routing_dem, valid_mask, xres_m, yres_m)
     flow_accumulation_m2 = _flow_accumulation_area(routing_dem, valid_mask, down_flat, cell_area_m2)
     runoff_accumulation_m3 = flow_accumulation_m2 * effective_depth_m
-    slope_percent = _slope_percent(dem, valid_mask, xres, yres)
+    slope_percent = _slope_percent(dem, valid_mask, xres_m, yres_m)
 
     flood_index = _relative_flood_index(flow_accumulation_m2, slope_percent, sink_mask, valid_mask)
     concentration_mask = _percentile_mask(
@@ -283,8 +395,8 @@ def simulate_runoff(
         valid_mask,
         effective_rainfall_mm,
         config,
-        xres,
-        yres,
+        xres_m,
+        yres_m,
     )
     relative_flood_mask = _lowland_flood_mask(
         flow_accumulation_m2,
@@ -305,11 +417,12 @@ def simulate_runoff(
 
     summary = {
         "model_version": RUNOFF_MODEL_VERSION,
+        "raster_crs": _crs_label(raster_crs),
         "input_crs_detected": detected_crs,
         "cells": int(np.count_nonzero(valid_mask)),
         "rows": int(dem.shape[0]),
         "cols": int(dem.shape[1]),
-        "pixel_size_m": float((xres + yres) / 2.0),
+        "pixel_size_m": float((xres_m + yres_m) / 2.0),
         "area_ha": area_m2 / 10_000.0,
         "rainfall_mm": rainfall_mm,
         "duration_min": float(config.duration_min),
@@ -336,7 +449,7 @@ def simulate_runoff(
         "overbank_area_ha": float(np.count_nonzero(overbank_mask) * cell_area_m2 / 10_000.0),
         "stream_percentile": float(config.stream_percentile),
         "channel_base_half_width_m": float(config.channel_base_half_width_m),
-        "effective_channel_half_width_m": float(max(float(config.channel_base_half_width_m), min(xres, yres) / 2.0)),
+        "effective_channel_half_width_m": float(max(float(config.channel_base_half_width_m), min(xres_m, yres_m) / 2.0)),
         "channel_spill_threshold_mm": float(config.channel_spill_threshold_mm),
         "channel_overflow_excess_mm": max(0.0, effective_rainfall_mm - float(config.channel_spill_threshold_mm)),
         "channel_overflow_width_m": _channel_overflow_width_m(effective_rainfall_mm, config),
@@ -357,6 +470,7 @@ def simulate_runoff(
         fill_depth_m=fill_depth_m,
         valid_mask=valid_mask,
         transform=transform,
+        raster_crs_wkt=raster_crs.to_wkt(),
         geometry_dem=geometry_dem,
         geometry_wgs84=geometry_wgs84,
         flow_accumulation_m2=flow_accumulation_m2,
@@ -381,11 +495,12 @@ def simulate_runoff(
 def clip_dem_to_geotiff_bytes(
     geometry: Polygon | MultiPolygon,
     dem_path: str | Path = REMOTE_DEM_DRIVE_URL,
-    input_crs: Literal["auto", "EPSG:4326", "EPSG:5367"] = "auto",
+    input_crs: str = "auto",
     buffer_m: float = 0.0,
     max_cells: int | None = None,
 ) -> ClipDemResult:
-    geometry_dem, geometry_wgs84, detected_crs = normalize_geometry(geometry, input_crs)
+    raster_crs = raster_crs_for_source(dem_path)
+    geometry_dem, geometry_wgs84, detected_crs = normalize_geometry(geometry, input_crs, raster_crs)
     if buffer_m:
         geometry_dem = _repair_geometry(_polygonal_geometry(geometry_dem.buffer(float(buffer_m))))
 
@@ -402,7 +517,7 @@ def clip_dem_to_geotiff_bytes(
             height=write_arr.shape[0],
             count=1,
             dtype="float32",
-            crs=DEM_CRS.to_wkt(),
+            crs=raster_crs.to_wkt(),
             transform=transform,
             nodata=nodata,
             compress="deflate",
@@ -414,17 +529,17 @@ def clip_dem_to_geotiff_bytes(
             dst.update_tags(AREA_OR_POINT="Area")
         data = memfile.read()
 
-    xres = abs(float(transform.a))
-    yres = abs(float(transform.e))
+    xres_m, yres_m = _pixel_size_m(transform, raster_crs, geometry_dem)
     summary = {
         "source": str(dem_path),
         "model_version": RUNOFF_MODEL_VERSION,
+        "raster_crs": _crs_label(raster_crs),
         "input_crs_detected": detected_crs,
         "rows": int(write_arr.shape[0]),
         "cols": int(write_arr.shape[1]),
         "cells": int(np.count_nonzero(valid_mask)),
-        "pixel_size_m": float((xres + yres) / 2.0),
-        "area_ha": float(np.count_nonzero(valid_mask) * xres * yres / 10000.0),
+        "pixel_size_m": float((xres_m + yres_m) / 2.0),
+        "area_ha": float(np.count_nonzero(valid_mask) * xres_m * yres_m / 10000.0),
         "output_bytes": len(data),
     }
     return ClipDemResult(data=data, summary=summary, geometry_wgs84=geometry_wgs84)
@@ -980,7 +1095,7 @@ def geotiff_bytes(result: RunoffResult, layer: str) -> bytes:
             height=write_arr.shape[0],
             count=1,
             dtype="float32",
-            crs=DEM_CRS.to_wkt(),
+            crs=result.raster_crs_wkt,
             transform=result.transform,
             nodata=nodata,
             compress="deflate",

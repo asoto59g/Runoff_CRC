@@ -48,6 +48,9 @@ def main() -> None:
     preview = load_preview(dem_path)
     if preview is None:
         return
+    with st.sidebar:
+        st.caption(f"MDE: {preview.width:,} x {preview.height:,} celdas")
+        st.caption(f"CRS: {preview.crs_label}")
 
     geometry, geometry_source, input_crs = geometry_panel(preview)
     config = simulation_controls(dem_path, input_crs)
@@ -263,13 +266,14 @@ def geometry_panel(preview):
         st.header("Poligono")
         input_crs_label = st.selectbox(
             "CRS del GeoJSON",
-            ["Auto", "WGS84 / EPSG:4326", "CRTM05 / EPSG:5367"],
+            ["Auto", "WGS84 / EPSG:4326", "CRTM05 / EPSG:5367", "CRS del raster"],
             index=0,
         )
         input_crs = {
             "Auto": "auto",
             "WGS84 / EPSG:4326": "EPSG:4326",
             "CRTM05 / EPSG:5367": "EPSG:5367",
+            "CRS del raster": "raster",
         }[input_crs_label]
 
     if mode == "Cargar GeoJSON":
@@ -294,16 +298,43 @@ def geometry_panel(preview):
 
 def draw_geometry(preview):
     min_lon, min_lat, max_lon, max_lat = preview.bounds_wgs84
+    bounds = [[min_lat, min_lon], [max_lat, max_lon]]
     center = [(min_lat + max_lat) / 2.0, (min_lon + max_lon) / 2.0]
-    m = folium.Map(location=center, zoom_start=8, tiles=None, control_scale=True)
+    map_key = f"draw_map_{_preview_map_key(preview)}"
+    active_key = f"active_polygon_{map_key}"
+
+    active_data = st.session_state.get(active_key)
+    active_geometry = None
+    if active_data:
+        try:
+            active_geometry = load_geojson_geometry(active_data)
+        except Exception:
+            st.session_state.pop(active_key, None)
+            active_data = None
+
+    m = folium.Map(location=center, zoom_start=10, tiles=None, control_scale=True)
     add_base_layers(m)
     folium.Rectangle(
-        bounds=[[min_lat, min_lon], [max_lat, max_lon]],
+        bounds=bounds,
         color="#2b6cb0",
         fill=False,
-        weight=1,
+        weight=2,
         tooltip="Extension MDE",
+        name="Extension MDE",
     ).add_to(m)
+
+    if active_data:
+        folium.GeoJson(
+            data=active_data,
+            name="Poligono activo",
+            tooltip="Poligono activo",
+            style_function=lambda _feature: {
+                "color": "#ff6f00",
+                "weight": 3,
+                "fillColor": "#ffb000",
+                "fillOpacity": 0.18,
+            },
+        ).add_to(m)
 
     Draw(
         export=False,
@@ -319,21 +350,38 @@ def draw_geometry(preview):
         edit_options={"edit": True, "remove": True},
     ).add_to(m)
     folium.LayerControl(collapsed=False).add_to(m)
+    m.fit_bounds(bounds)
 
     state = st_folium(
         m,
         height=520,
         use_container_width=True,
         returned_objects=["all_drawings", "last_active_drawing"],
-        key="draw_map",
+        key=map_key,
     )
     drawings = state.get("all_drawings") if isinstance(state, dict) else None
     if not drawings:
         drawing = state.get("last_active_drawing") if isinstance(state, dict) else None
         drawings = [drawing] if drawing else []
-    if not drawings:
-        return None
-    return load_geojson_geometry(_drawings_to_feature_collection(drawings))
+
+    if drawings:
+        active_data = _drawings_to_feature_collection(drawings)
+        active_geometry = load_geojson_geometry(active_data)
+        st.session_state[active_key] = active_data
+
+    if active_geometry is not None:
+        st.success("Poligono activo marcado en el mapa.")
+        if st.button("Limpiar poligono activo", use_container_width=True, key=f"clear_{map_key}"):
+            st.session_state.pop(active_key, None)
+            st.rerun()
+        return active_geometry
+    return None
+
+
+def _preview_map_key(preview) -> str:
+    raw = f"{preview.raster_crs_wkt}|{preview.bounds_dem}|{preview.width}|{preview.height}"
+    return hashlib.sha256(raw.encode("utf-8", errors="ignore")).hexdigest()[:12]
+
 
 
 def _drawings_to_feature_collection(drawings):
@@ -653,7 +701,7 @@ def result_overlay_bounds(result) -> list[list[float]]:
     top = result.transform.f
     right = left + cols * result.transform.a
     bottom = top + rows * result.transform.e
-    west, south, east, north = transform_bounds_dem_to_wgs84((left, bottom, right, top))
+    west, south, east, north = transform_bounds_dem_to_wgs84((left, bottom, right, top), result.raster_crs_wkt)
     return [[south, west], [north, east]]
 
 

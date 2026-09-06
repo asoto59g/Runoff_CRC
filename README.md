@@ -5,11 +5,11 @@
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?logo=streamlit&logoColor=white)
 ![GIS](https://img.shields.io/badge/GIS-rasterio%20%7C%20shapely-2E7D32)
-![CRS](https://img.shields.io/badge/CRS-CR05%20%2F%20CRTM05-blue)
+![CRS](https://img.shields.io/badge/CRS-WGS84%20%7C%20CRTM05%20%7C%20raster-blue)
 ![Repo](https://img.shields.io/badge/GitHub-asoto59g%2FRunoff_CRC-181717?logo=github)
 ![Estado](https://img.shields.io/badge/Estado-Prototipo-orange)
 
-Aplicacion Streamlit para simular escorrentia superficial, concentracion de flujo y zonas potencialmente inundables a partir de un modelo digital de elevacion (MDE/DEM). Esta orientada a analisis rapidos en Costa Rica usando datos en `CR05 / CRTM05` (`EPSG:5367`) y permite trabajar sobre un poligono dibujado en el mapa o cargado en formato GeoJSON.
+Aplicacion Streamlit para simular escorrentia superficial, concentracion de flujo y zonas potencialmente inundables a partir de un modelo digital de elevacion (MDE/DEM). Esta orientada a analisis rapidos en Costa Rica con un MDE publico por defecto en `CR05 / CRTM05` (`EPSG:5367`), pero tambien permite subir un GeoTIFF georreferenciado de cualquier zona del mundo y trabajar sobre un poligono dibujado en el mapa o cargado en formato GeoJSON.
 
 La app no descarga el MDE completo cuando se usa la fuente publica de Google Drive: resuelve el enlace publico, valida soporte de rangos HTTP y recorta solamente la ventana que intersecta el poligono de analisis. Si GDAL/Rasterio no logra abrir directamente el BigTIFF remoto de Drive, la app crea un GeoTIFF temporal con solo las teselas que cubren el poligono.
 
@@ -24,11 +24,14 @@ https://runoffcrc-uatqrmxbapeecw5mrwznsg.streamlit.app/
 - Muestra un mapa base OSM o satelital.
 - Permite dibujar un poligono o cargar un GeoJSON.
 - Usa por defecto un MDE publico en Google Drive o permite subir un GeoTIFF desde el equipo del usuario.
+- Al cargar un GeoTIFF, lee su CRS y extension, dibuja el borde del MDE y hace zoom automatico sobre esa zona para digitalizar el poligono.
+- Mantiene y resalta el poligono activo en el mapa de dibujo para evitar analizar una geometria equivocada.
 - Recorta el MDE al area de interes para reducir memoria y tiempo de proceso.
 - Lee BigTIFF remoto por rangos HTTP cuando Google Drive no funciona directamente como `/vsicurl`.
 - Acondiciona hidrologicamente el MDE recortado para evitar que depresiones internas corten artificialmente la acumulacion.
 - Calcula direccion de flujo D8 y area contribuyente acumulada.
 - Simula lluvia efectiva con lluvia total, duracion, infiltracion, abstraccion inicial y coeficiente de escorrentia.
+- Convierte geometrias WGS84/CRTM05 al CRS real del raster y estima dimensiones de pixel en metros para rasters proyectados o geograficos.
 - Dibuja capas transparentes sobre el mapa base: cauce ocupado, desborde de rios, bajos/depresiones de llanura y concentracion de flujo.
 - Exporta resultados como GeoTIFF y el poligono de analisis como GeoJSON WGS84.
 
@@ -71,8 +74,8 @@ http://localhost:8501
 
 ## Flujo de trabajo
 
-1. Selecciona la fuente del MDE: `Google Drive publico`, `Subir GeoTIFF` o `Ruta del servidor (avanzado)`. En Streamlit Cloud, usa `Subir GeoTIFF` para escoger archivos desde Windows.
-2. Dibuja el poligono de analisis en el mapa o carga un GeoJSON.
+1. Selecciona la fuente del MDE: `Google Drive publico`, `Subir GeoTIFF` o `Ruta del servidor (avanzado)`. En Streamlit Cloud, usa `Subir GeoTIFF` para escoger archivos desde Windows; al cargarse, el mapa se centra automaticamente en la extension del TIFF.
+2. Dibuja el poligono de analisis en el mapa centrado en el MDE o carga un GeoJSON. El poligono activo queda resaltado en naranja.
 3. Ajusta lluvia total, duracion, infiltracion, abstraccion inicial y coeficiente de escorrentia.
 4. Ajusta parametros de cauce, desborde y umbrales de analisis si es necesario.
 5. Ejecuta la simulacion.
@@ -80,9 +83,9 @@ http://localhost:8501
 
 ## GeoTIFF local
 
-En la app publicada, la opcion `Subir GeoTIFF` abre el selector normal del navegador y permite escoger archivos desde el equipo del usuario, por ejemplo desde Windows. La opcion `Ruta del servidor (avanzado)` navega el sistema de archivos donde corre Streamlit; en Streamlit Cloud ese servidor usa rutas Linux y no corresponde a las carpetas del usuario.
+En la app publicada, la opcion `Subir GeoTIFF` abre el selector normal del navegador y permite escoger archivos desde el equipo del usuario, por ejemplo desde Windows. El GeoTIFF puede estar en cualquier pais si trae CRS definido; la app transforma su extension a WGS84 para ubicarlo sobre OSM/satelite. La opcion `Ruta del servidor (avanzado)` navega el sistema de archivos donde corre Streamlit; en Streamlit Cloud ese servidor usa rutas Linux y no corresponde a las carpetas del usuario.
 
-Para MDE grandes, normalmente conviene usar la fuente de Google Drive o preparar un recorte/COG, porque la subida por navegador depende del limite de archivo y memoria disponible en Streamlit Cloud.
+Para MDE grandes, normalmente conviene usar la fuente de Google Drive o preparar un recorte/COG, porque la subida por navegador depende del limite de archivo y memoria disponible en Streamlit Cloud. Para resultados hidrologicos mas consistentes se recomienda usar rasters proyectados en unidades lineales; si el raster esta en grados, la app estima el tamano de pixel en metros segun la ubicacion.
 
 ## Recorte remoto desde Google Drive
 
@@ -128,4 +131,4 @@ git push -u origin main
 
 Este prototipo identifica zonas relativas de concentracion, cauce ocupado, desborde lateral y posible anegamiento segun topografia. No reemplaza un modelo hidraulico 1D/2D calibrado, no calcula tirantes reales, velocidades, niveles contra infraestructura, alcantarillas, redes pluviales, rugosidad espacial, uso de suelo ni curvas IDF oficiales.
 
-El MDE fuente esta etiquetado como `LOCAL_CS["CRTM05"]`; la app lo trata como `CR05 / CRTM05`, `EPSG:5367`.
+El MDE publico por defecto esta etiquetado como `LOCAL_CS["CRTM05"]`; la app lo trata como `CR05 / CRTM05`, `EPSG:5367`. Los GeoTIFF cargados por el usuario usan su propio CRS cuando este es transformable a WGS84.
