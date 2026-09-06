@@ -1,4 +1,7 @@
 # Modelo de escorrentia por DEM para Costa Rica
+<p align="center">
+  <img src="runoff.gif" alt="Runoff simulation" width="800">
+</p>
 
 [![Python check](https://github.com/asoto59g/Runoff_CRC/actions/workflows/python-check.yml/badge.svg)](https://github.com/asoto59g/Runoff_CRC/actions/workflows/python-check.yml)
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://runoffcrc-uatqrmxbapeecw5mrwznsg.streamlit.app/)
