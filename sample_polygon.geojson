@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "poligono_prueba_cr"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [-84.1080, 9.9400],
+            [-84.0880, 9.9400],
+            [-84.0880, 9.9200],
+            [-84.1080, 9.9200],
+            [-84.1080, 9.9400]
+          ]
+        ]
+      }
+    }
+  ]
+}

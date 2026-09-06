@@ -1,0 +1,8 @@
+* text=auto
+*.tif binary
+*.tiff binary
+*.vrt binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary

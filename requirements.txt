@@ -1,0 +1,12 @@
+streamlit>=1.56,<2
+streamlit-folium>=0.27,<1
+folium>=0.20,<1
+rasterio>=1.4,<2
+numpy>=2,<3
+scipy>=1.14,<2
+pyproj>=3.6,<4
+shapely>=2,<3
+matplotlib>=3.8,<4
+Pillow>=10,<13
+requests>=2.31,<3
+affine>=2.4,<3
