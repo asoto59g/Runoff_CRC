@@ -1,6 +1,7 @@
 # Modelo de escorrentia por DEM para Costa Rica
 
 [![Python check](https://github.com/asoto59g/Runoff_CRC/actions/workflows/python-check.yml/badge.svg)](https://github.com/asoto59g/Runoff_CRC/actions/workflows/python-check.yml)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://runoffcrc-uatqrmxbapeecw5mrwznsg.streamlit.app/)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)
 ![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?logo=streamlit&logoColor=white)
 ![GIS](https://img.shields.io/badge/GIS-rasterio%20%7C%20shapely-2E7D32)
@@ -11,6 +12,12 @@
 Aplicacion Streamlit para simular escorrentia superficial, concentracion de flujo y zonas potencialmente inundables a partir de un modelo digital de elevacion (MDE/DEM). Esta orientada a analisis rapidos en Costa Rica usando datos en `CR05 / CRTM05` (`EPSG:5367`) y permite trabajar sobre un poligono dibujado en el mapa o cargado en formato GeoJSON.
 
 La app no descarga el MDE completo cuando se usa la fuente publica de Google Drive: resuelve el enlace publico, valida soporte de rangos HTTP y recorta solamente la ventana que intersecta el poligono de analisis.
+
+## App publicada
+
+La aplicacion esta disponible en Streamlit Community Cloud:
+
+https://runoffcrc-uatqrmxbapeecw5mrwznsg.streamlit.app/
 
 ## Que hace
 
