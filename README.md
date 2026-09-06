@@ -11,7 +11,7 @@
 
 Aplicacion Streamlit para simular escorrentia superficial, concentracion de flujo y zonas potencialmente inundables a partir de un modelo digital de elevacion (MDE/DEM). Esta orientada a analisis rapidos en Costa Rica usando datos en `CR05 / CRTM05` (`EPSG:5367`) y permite trabajar sobre un poligono dibujado en el mapa o cargado en formato GeoJSON.
 
-La app no descarga el MDE completo cuando se usa la fuente publica de Google Drive: resuelve el enlace publico, valida soporte de rangos HTTP y recorta solamente la ventana que intersecta el poligono de analisis.
+La app no descarga el MDE completo cuando se usa la fuente publica de Google Drive: resuelve el enlace publico, valida soporte de rangos HTTP y recorta solamente la ventana que intersecta el poligono de analisis. Si GDAL/Rasterio no logra abrir directamente el BigTIFF remoto de Drive, la app crea un GeoTIFF temporal con solo las teselas que cubren el poligono.
 
 ## App publicada
 
@@ -25,6 +25,7 @@ https://runoffcrc-uatqrmxbapeecw5mrwznsg.streamlit.app/
 - Permite dibujar un poligono o cargar un GeoJSON.
 - Usa por defecto un MDE publico en Google Drive o permite seleccionar un GeoTIFF local.
 - Recorta el MDE al area de interes para reducir memoria y tiempo de proceso.
+- Lee BigTIFF remoto por rangos HTTP cuando Google Drive no funciona directamente como `/vsicurl`.
 - Acondiciona hidrologicamente el MDE recortado para evitar que depresiones internas corten artificialmente la acumulacion.
 - Calcula direccion de flujo D8 y area contribuyente acumulada.
 - Simula lluvia efectiva con lluvia total, duracion, infiltracion, abstraccion inicial y coeficiente de escorrentia.

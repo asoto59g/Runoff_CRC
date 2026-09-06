@@ -25,7 +25,7 @@ from rasterio.windows import Window
 from shapely.geometry import GeometryCollection, MultiPolygon, Polygon, box, mapping, shape
 from shapely.ops import transform as shapely_transform
 from shapely.ops import unary_union
-from remote_raster import DEFAULT_DRIVE_DEM_URL, open_raster_source
+from remote_raster import DEFAULT_DRIVE_DEM_URL, RemoteRasterError, is_http_url, open_raster_source, read_remote_tiff_info
 
 
 DEM_CRS = CRS.from_epsg(5367)  # CR05 / CRTM05, meters. The source TIFF is tagged as LOCAL_CS["CRTM05"].
@@ -107,17 +107,34 @@ class ClipDemResult:
 
 
 def read_raster_preview(dem_path: str | Path = DEFAULT_DEM_PATH) -> RasterPreview:
-    with open_raster_source(dem_path) as src:
-        bounds_dem = tuple(float(v) for v in src.bounds)
-        bounds_wgs84 = transform_bounds_dem_to_wgs84(bounds_dem)
-        res = (abs(float(src.transform.a)), abs(float(src.transform.e)))
+    try:
+        with open_raster_source(dem_path) as src:
+            bounds_dem = tuple(float(v) for v in src.bounds)
+            bounds_wgs84 = transform_bounds_dem_to_wgs84(bounds_dem)
+            res = (abs(float(src.transform.a)), abs(float(src.transform.e)))
+            return RasterPreview(
+                crs_label="CRTM05 / EPSG:5367",
+                bounds_dem=bounds_dem,
+                bounds_wgs84=bounds_wgs84,
+                width=src.width,
+                height=src.height,
+                resolution=res,
+            )
+    except Exception as exc:
+        if not is_http_url(dem_path):
+            raise
+        try:
+            info = read_remote_tiff_info(dem_path)
+        except Exception:
+            raise exc
+        bounds_dem = tuple(float(v) for v in info.bounds)
         return RasterPreview(
             crs_label="CRTM05 / EPSG:5367",
             bounds_dem=bounds_dem,
-            bounds_wgs84=bounds_wgs84,
-            width=src.width,
-            height=src.height,
-            resolution=res,
+            bounds_wgs84=transform_bounds_dem_to_wgs84(bounds_dem),
+            width=info.width,
+            height=info.height,
+            resolution=info.resolution,
         )
 
 
@@ -418,7 +435,7 @@ def _read_dem_clip(
     geometry_dem: Polygon | MultiPolygon,
     max_cells: int | None,
 ) -> tuple[np.ndarray, Affine, np.ndarray, Polygon | MultiPolygon]:
-    with open_raster_source(dem_path) as src:
+    with open_raster_source(dem_path, subset_bounds=geometry_dem.bounds) as src:
         raster_bounds = box(*src.bounds)
         if not raster_bounds.intersects(geometry_dem):
             raise RunoffModelError("El poligono no intersecta el MDE.")

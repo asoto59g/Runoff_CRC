@@ -12,6 +12,7 @@ from PIL import Image
 from folium.plugins import Draw
 from streamlit_folium import st_folium
 
+from remote_raster import RemoteRasterError
 from runoff_model import (
     DEFAULT_DEM_PATH,
     REMOTE_DEM_DRIVE_URL,
@@ -65,7 +66,7 @@ def main() -> None:
             with st.spinner("Recortando MDE y calculando escorrentia..."):
                 try:
                     st.session_state["result"] = simulate_runoff(geometry, config)
-                except RunoffModelError as exc:
+                except (RunoffModelError, RemoteRasterError) as exc:
                     st.error(str(exc))
                 except Exception as exc:  # Keep unexpected GIS errors visible in the prototype.
                     st.exception(exc)
@@ -322,7 +323,7 @@ def clip_panel(geometry, dem_path: str, input_crs: str) -> None:
                         buffer_m=buffer_m,
                         max_cells=max_cells,
                     )
-                except RunoffModelError as exc:
+                except (RunoffModelError, RemoteRasterError) as exc:
                     st.error(str(exc))
                 except Exception as exc:
                     st.exception(exc)
